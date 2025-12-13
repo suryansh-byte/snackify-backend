@@ -2,6 +2,8 @@ from flask import Flask, request, jsonify
 from flask_bcrypt import Bcrypt
 from haversine import haversine_distance
 from models import db, User, Restaurant, Driver, Order
+# Optional MongoDB support (PyMongo)
+from pymongo import MongoClient, errors as pymongo_errors
 import jwt
 import datetime
 import os
@@ -19,6 +21,30 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db.init_app(app)
 bcrypt = Bcrypt(app)
+
+# Optional MongoDB client. If `MONGODB_URI` is set in environment, the app
+# will attempt to connect and expose a `/mongo-health` endpoint to verify
+# connectivity. This keeps the existing SQLAlchemy code intact while
+# providing an alternate backend connection for services that prefer MongoDB.
+MONGO_CLIENT = None
+MONGO_DB = None
+MONGODB_URI = os.environ.get('MONGODB_URI')
+if MONGODB_URI:
+    try:
+        MONGO_CLIENT = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+        # Try a quick ping to verify connection
+        MONGO_CLIENT.admin.command('ping')
+        # If the URI contains a default database, get_default_database() returns it.
+        try:
+            MONGO_DB = MONGO_CLIENT.get_default_database()
+        except Exception:
+            # Fallback: use a database named 'snackify'
+            MONGO_DB = MONGO_CLIENT.get_database('snackify')
+        app.logger.info('Connected to MongoDB')
+    except pymongo_errors.PyMongoError as e:
+        MONGO_CLIENT = None
+        MONGO_DB = None
+        app.logger.error(f'Failed to connect to MongoDB: {e}')
 
 # --- HELPER FUNCTION: AUTHENTICATION DECORATOR ---
 # This ensures only authenticated users can access certain routes
@@ -172,18 +198,27 @@ def health_check():
     return jsonify({'status': 'ok'}), 200
 
 
+@app.route('/mongo-health', methods=['GET'])
+def mongo_health():
+    """Lightweight endpoint to check MongoDB connectivity when `MONGODB_URI` is used.
+    Returns list of databases when reachable, otherwise returns an error message.
+    """
+    if not MONGO_CLIENT:
+        return jsonify({'status': 'mongo_disabled', 'message': 'MONGODB_URI not configured or connection failed'}), 400
+
+    try:
+        # server_info or list_database_names will raise if the server is unreachable
+        dbs = MONGO_CLIENT.list_database_names()
+        return jsonify({'status': 'ok', 'dbs': dbs}), 200
+    except pymongo_errors.PyMongoError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
 if __name__ == '__main__':
     # Initialize the database and create tables if they don't exist
     with app.app_context():
-        db.create_all() 
-        # Optional: Add initial mock data (restaurants, drivers) here for testing
-        
-    # ** You would replace app.run(debug=True) with socketio.run(app, debug=True) 
+        db.create_all()
+
+    # ** You would replace app.run(debug=True) with socketio.run(app, debug=True)
     #    when integrating WebSockets (Flask-SocketIO) in Step 5. **
     app.run(debug=True)
-
-
-# Simple health endpoint for quick checks
-@app.route('/health', methods=['GET'])
-def health_check():
-    return jsonify({'status': 'ok'}), 200

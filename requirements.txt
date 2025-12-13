@@ -6,3 +6,7 @@ PyJWT
 requests
 # Optional (only needed if you use Postgres)
 psycopg2-binary
+gunicorn
+# MongoDB driver (use when MONGODB_URI is provided)
+pymongo
+dnspython
